@@ -8,11 +8,16 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, classification_report, mean_absolute_error, r2_score
 from sklearn.calibration import CalibratedClassifierCV
 from imblearn.over_sampling import SMOTE  # pip install imbalanced-learn
-
+import os
 # -------------------------
 # Load Data and Preprocess
 # -------------------------
-df = pd.read_csv("air_pollution_model/scaled_dataset.csv")
+base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'backend'))
+# Construct the full path to the dataset 
+dataset_path = os.path.join(base_dir, "air_pollution_model", "Final_dataset.csv")
+
+# Load the dataset
+df = pd.read_csv(dataset_path)
 
 # Verify Column Names
 print("Columns in DataFrame:", df.columns.tolist())
