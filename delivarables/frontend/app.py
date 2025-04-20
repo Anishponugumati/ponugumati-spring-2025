@@ -57,6 +57,7 @@ def predict_zoning():
     # Step 2: Extract features
     try:
         print("Starting feature extraction...")
+        print(f"Polygon coordinates: {polygon}...")  # Print first 5 points for debuggin
         features = extract_all_features_from_polygon(polygon)
         print(f"Features extracted: {features}")
     except Exception as e:

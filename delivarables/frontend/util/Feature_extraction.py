@@ -34,15 +34,28 @@ overpass_api = overpy.Overpass()
 
 # === Geo Helper ===
 def get_centroid(polygon_coords):
-    poly = Polygon(polygon_coords)
-    centroid = poly.centroid
-    lat, lon = centroid.y, centroid.x 
-    # Validate latitude
-    if lat < -90 or lat > 90:
-        print(f"⚠️ Invalid centroid latitude: {lat}. Adjusting to valid range.")
-        lat = max(min(lat, 90), -90)  # Clamp between -90 and 90
+    """
+    Calculate the centroid of a polygon.
+    Expects polygon_coords in (latitude, longitude) format.
+    """
+    try:
+        poly = Polygon([(lon, lat) for lat, lon in polygon_coords])
+        if poly.is_empty:
+            raise ValueError("Cannot compute centroid of empty polygon")
+            
+        centroid = poly.centroid
+        lat, lon = centroid.y, centroid.x  # Shapely returns (x,y) which is (lon,lat)
         
-    return lat, lon
+        # Validate latitude
+        if lat < -90 or lat > 90:
+            print(f"⚠️ Invalid centroid latitude: {lat}. Adjusting to valid range.")
+            lat = max(min(lat, 90), -90)
+            
+        return lat, lon
+    except Exception as e:
+        print(f"Error calculating centroid: {e}")
+        # Return a default value or raise an exception
+        raise
 
 def get_timezone(lat, lon):
     tf = TimezoneFinder()
@@ -68,15 +81,9 @@ def extract_traffic_features(lat, lon):
     minute = local_time.minute
 
     # Fetch weather data from Open-Meteo API
-    weather_url = f"https://api.open-meteo.com/v1/forecast"
-    weather_params = {
-        "latitude": lat,
-        "longitude": lon,
-        "current_weather": True,
-        "timezone": local_tz
-    }
+    weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
     try:
-        weather_response = requests.get(weather_url, params=weather_params)
+        weather_response = requests.get(weather_url)
         weather_response.raise_for_status()
         weather_data = weather_response.json().get("current_weather", {})
         temperature = weather_data.get("temperature", 0)
@@ -88,9 +95,14 @@ def extract_traffic_features(lat, lon):
         wind_speed = 0
         weather_code = 0
 
+    frc_mapping = {
+    "FRC0": 0, "FRC1": 1, "FRC2": 2, "FRC3": 3, "FRC4": 4,
+    "FRC5": 5, "FRC6": 6, "FRC7": 7  # Default is 7 (Minor Local Roads)
+    }
     # Fetch traffic data from TomTom API
     TOMTOM_API_KEY = "TaKVpj4FLGV2CwAc6pKfpEbJFzqnpOWr"
-    tomtom_url = f"https://api.tomtom.com/traffic/services/4/flowSegmentData/absolute/18/json?key={TOMTOM_API_KEY}&point={lat},{lon}"
+    TOMTOM_URL = "https://api.tomtom.com/traffic/services/4/flowSegmentData/absolute/18/json"
+    tomtom_url = f"{TOMTOM_URL}?key={TOMTOM_API_KEY}&point={lat},{lon}"
     try:
         traffic_response = requests.get(tomtom_url)
         traffic_response.raise_for_status()
@@ -98,9 +110,10 @@ def extract_traffic_features(lat, lon):
         confidence = traffic_data.get("confidence", 0.0)
         current_speed = traffic_data.get("currentSpeed", 1)
         free_flow_speed = max(traffic_data.get("freeFlowSpeed", 1), 1)
+        frc= traffic_data.get("frc", "FRC7")  # Default FRC value if not found
         actual_speed_ratio = current_speed / free_flow_speed
         speed_deviation = free_flow_speed - current_speed
-        frc = get_frc_from_api(lat, lon)  # Fetch FRC dynamically
+        frc =frc_mapping.get(frc, 7)  # Map FRC to integer value, default to 7 if not found
     except requests.RequestException as e:
         print(f"❌ Traffic API request failed: {e}")
         confidence = 0.0
@@ -138,12 +151,6 @@ def extract_traffic_features(lat, lon):
         "raw": features.to_dict(orient="records")[0]
     }
 
-
-def get_frc_from_api(lat, lon):
-    """
-    Placeholder function for fetching Functional Road Class (FRC).
-    """
-    return 3  # Default FRC value
 
 def get_season(month):
     """Returns season based on the month."""
@@ -252,8 +259,8 @@ def get_distances(lat, lon):
             query = f"""
             [out:json];
             (
-              way["{tag}"](around:5000,{lat},{lon});
-              node["{tag}"](around:5000,{lat},{lon});
+              way["{tag}"](around:1000,{lat},{lon});
+              node["{tag}"](around:1000,{lat},{lon});
             );
             out center;
             """
@@ -406,28 +413,17 @@ def map_land_cover_to_number(land_cover_label):
 # Main Function
 
 
-def extract_land_use_features(polygon_coords):
+def extract_land_use_features(polygon_coords,lat, lon):
     """
     Extract land-use features for a given polygon.
     """
-
-      # Validate coordinates
-    for i, (lat, lon) in enumerate(polygon_coords):
-        if lat < -90 or lat > 90:
-            print(f"⚠️ Invalid latitude at point {i}: {lat}. Adjusting to valid range.")
-            polygon_coords[i] = (max(min(lat, 90), -90), lon)
     
     # Create polygon and validate geometry
     # poly = Polygon([(lon, lat) for lat, lon in polygon_coords])
 
     # Create polygon and validate geometry
-    poly = Polygon([(lon, lat) for lat, lon in polygon_coords])
-    if not poly.is_valid:
-        print("⚠️ Invalid polygon geometry detected. Attempting to fix...")
-        poly = poly.buffer(0)  # Fix invalid geometries
-    if not poly.is_valid:
-        raise ValueError("Polygon geometry could not be fixed. Please check the input coordinates.")
-
+    polygon_coords_transformed = [(coord[1], coord[0]) for coord in polygon_coords]
+    poly = Polygon(polygon_coords)
     # Ensure the polygon is closed
     if polygon_coords[0] != polygon_coords[-1]:
         raise ValueError("Polygon coordinates must form a closed loop (first and last points must be the same).")
@@ -439,30 +435,49 @@ def extract_land_use_features(polygon_coords):
     comp = comp if comp is not None else 0
 
     # Get centroid
-    centroid = poly.centroid
-    latc, lonc = centroid.y, centroid.x
+    latc, lonc = lat,lon
 
     # Query Overpass for landuse/natural at the centroid point
+    poly_str = ' '.join(f"{pt[1]} {pt[0]}" for pt in polygon_coords)
     query = f"""
     [out:json];
     (
       way(around:100.0,{latc},{lonc})["landuse"];
       way(around:100.0,{latc},{lonc})["natural"];
+      way(poly:"{poly_str}")["building"];
+      node(poly:"{poly_str}")["building"];
     );
     out body;
     """
     result = overpass_api.query(query)
     land_cover = 'Unknown'
-
-    if result.ways:
-        way = result.ways[0]  # Take the first hit
-        land_cover = map_land_cover_from_tags(way.tags)
-
+    land_cover = 'Unknown'
+    for w in result.ways:
+        if 'landuse' in w.tags or 'natural' in w.tags:
+            land_cover = map_land_cover_from_tags(w.tags)
+            break
     land_cover = map_land_cover_to_number(land_cover)
+
+    # 7) Building count and population density proxy
+    building_ways = [w for w in result.ways if 'building' in w.tags]
+    building_nodes = result.nodes  # only building nodes queried
+    building_count = len(building_ways) + len(building_nodes)
+    popden = building_count / (area / 1e6) if area > 0 else 0
+
+    # if result.ways:
+    #     way = result.ways[0]  # Take the first hit
+    #     land_cover = map_land_cover_from_tags(way.tags)
+
+    # land_cover = map_land_cover_to_number(land_cover)
+
+    # # 6) Building count and population density proxy
+    # counts = result.counts
+    # building_count = counts.get('ways', 0) + counts.get('nodes', 0)
+    # popden = building_count / (area / 1e6) if area > 0 else 0
 
     # Get distances, population density, and elevation stats
     dwater, droad = get_distances(latc, lonc)
-    popden = 64090.0  # Example population density
+    # popden = 64090.0  # Example population density
     me, ma, mi, ms = get_elevation_stats(poly)
 
     # Set standard values for missing data
@@ -500,24 +515,38 @@ def extract_land_use_features(polygon_coords):
 # === Main Unified Extractor ===
 def extract_all_features_from_polygon(polygon_coords):
     # lat, lon = get_centroid(polygon_coords)
-    polygon_coords_transformed = [(lat, lon) for lon, lat in polygon_coords]
-    
-    lat, lon = get_centroid(polygon_coords_transformed)
-
+    polygon_coords_transformed = [(coord[1], coord[0]) for coord in polygon_coords]
+    print(f"Transformed Polygon Coordinates: {polygon_coords_transformed}")
+    lat,lon = get_centroid(polygon_coords_transformed)
+    print(f"Centroid: {lat}, {lon}")
     return {
         "centroid": {"lat": lat, "lon": lon},
         "Traffic": extract_traffic_features(lat, lon),
         "Pollution": extract_pollution_features(lat, lon),
-        "LandUse": extract_land_use_features(polygon_coords)
+        "LandUse": extract_land_use_features(polygon_coords,lat,lon)
     }
 
 # === Example for Testing ===
-if __name__ == "__main__":
-    polygon = [
-        [41.879, -87.632], [41.879, -87.627],
-        [41.874, -87.627], [41.874, -87.632],
-        [41.879, -87.632]
-    ]
+# if __name__ == "__main__":
+    # polygon = [
+    #     [41.879, -87.632], [41.879, -87.627],
+    #     [41.874, -87.627], [41.874, -87.632],
+    #     [41.879, -87.632]
+    # ]
+    # polygon = [[-122.442829, 37.792034], 
+    #                     [-122.431439, 37.792034],
+    #                     [-122.431439, 37.801034],
+    #                     [-122.442829, 37.801034], 
+    #                     [-122.442829, 37.792034]]
 
-    result = extract_all_features_from_polygon(polygon)
-    print(result)
+    # For San Francisco area (correct coordinates)
+    # polygon = [
+    #     [-122.442829, 37.792034],  # [lon, lat]
+    #     [-122.431439, 37.792034],
+    #     [-122.431439, 37.801034], 
+    #     [-122.442829, 37.801034],
+    #     [-122.442829, 37.792034]  # Same as first point to close the polygon
+    # ]
+
+    # result = extract_all_features_from_polygon(polygon)
+    # print(result)
