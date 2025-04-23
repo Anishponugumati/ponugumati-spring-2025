@@ -57,7 +57,6 @@ def predict_zoning():
     # Step 2: Extract features
     try:
         print("Starting feature extraction...")
-        print(f"Polygon coordinates: {polygon}...")  # Print first 5 points for debuggin
         features = extract_all_features_from_polygon(polygon)
         print(f"Features extracted: {features}")
     except Exception as e:
@@ -74,10 +73,10 @@ def predict_zoning():
         print(f"Meta-model failed: {str(e)}")
         return jsonify({'error': f'Meta-model failed: {str(e)}'}), 500
     
-    # Step 4: Prepare mock data for air pollution and traffic
-    # In a real app, these would come from separate models
-    mock_air_data = {
-        'aqi': 75,
+    # Step 4: Prepare air pollution data
+    # Extract relevant pollution data from features if available
+    air_pollution_data = {
+        'aqi': 75,  # Default value
         'pollutants': {
             'pm25': 12.5,
             'pm10': 35.2,
@@ -88,8 +87,24 @@ def predict_zoning():
         }
     }
     
-    mock_traffic_data = {
-        'congestion_level': 'Medium',
+    # If pollution data exists in features, use it
+    if 'Pollution' in features:
+        pollution = features['Pollution']
+        if 'raw' in pollution:
+            raw_pollution = pollution['raw']
+            # Update with actual values if available
+            if 'CO AQI Value' in raw_pollution:
+                air_pollution_data['pollutants']['co'] = raw_pollution['CO AQI Value']
+            if 'Ozone AQI Value' in raw_pollution:
+                air_pollution_data['pollutants']['o3'] = raw_pollution['Ozone AQI Value']
+            if 'NO2 AQI Value' in raw_pollution:
+                air_pollution_data['pollutants']['no2'] = raw_pollution['NO2 AQI Value']
+            if 'PM2.5 AQI Value' in raw_pollution:
+                air_pollution_data['pollutants']['pm25'] = raw_pollution['PM2.5 AQI Value']
+    
+    # Step 5: Prepare traffic data
+    traffic_data = {
+        'congestion_level': 'Medium',  # Default value
         'metrics': {
             'average_speed': 28.5,
             'peak_hour_congestion': 'High',
@@ -98,13 +113,37 @@ def predict_zoning():
         }
     }
     
-    # Step 5: Return combined response
+    # If traffic data exists in features, use it
+    if 'Traffic' in features:
+        traffic = features['Traffic']
+        if 'raw' in traffic:
+            raw_traffic = traffic['raw']
+            # Update with actual values if available
+            if 'Speed_Deviation' in raw_traffic:
+                traffic_data['metrics']['average_speed'] = 30 - raw_traffic['Speed_Deviation']
+            if 'Is_Peak_Hour' in raw_traffic:
+                traffic_data['metrics']['peak_hour_congestion'] = 'High' if raw_traffic['Is_Peak_Hour'] == 1 else 'Low'
+    
+    # Step 6: Flatten and clean features for display
+    display_features = {}
+    
+    # Process LandUse features
+    if 'LandUse' in features:
+        for key, value in features['LandUse'].items():
+            display_features[key] = value
+    
+    # Add centroid information
+    if 'centroid' in features:
+        display_features['latitude'] = features['centroid']['lat']
+        display_features['longitude'] = features['centroid']['lon']
+    
+    # Step 7: Return combined response
     response = {
         'zoning_recommendation': zoning,
         'improvement_suggestions': suggestions,
-        'features': features,
-        'air_pollution': mock_air_data,
-        'traffic': mock_traffic_data
+        'features': display_features,
+        'air_pollution': air_pollution_data,
+        'traffic': traffic_data
     }
     
     print("Returning complete response")
